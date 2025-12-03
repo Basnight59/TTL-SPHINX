@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect } from 'react';
-import { FaithFrameworkId, SphinxResponse } from '../types';
+import React, { useState, useEffect, useRef } from 'react';
+import { FaithFrameworkId, SphinxResponse, AuditLogEntry } from '../types';
 import { FRAMEWORKS, SPHINX_LETTERS } from '../constants';
 import { CheckCircle, Eye, Fingerprint, Scale, Cpu, Network, ArrowRight } from 'lucide-react';
 
@@ -8,16 +8,21 @@ interface SphinxEngineProps {
   data: SphinxResponse;
   frameworkId: FaithFrameworkId;
   onComplete: () => void;
+  onLog: (actor: AuditLogEntry['actor'], action: string, details?: string) => void;
 }
 
 const STEP_DURATION = 3500; // Increased duration to show "Handoff" state
 const CONSENT_STEP_INDEX = 3; // Index for 'Investigate'
 
-export const SphinxEngine: React.FC<SphinxEngineProps> = ({ data, frameworkId, onComplete }) => {
+export const SphinxEngine: React.FC<SphinxEngineProps> = ({ data, frameworkId, onComplete, onLog }) => {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isHandoff, setIsHandoff] = useState(false); // State for "Routing..." animation
   const [isPausedForConsent, setIsPausedForConsent] = useState(false);
   const [consentGranted, setConsentGranted] = useState(false);
+  
+  // Refs to track logged states to prevent duplicates in React 18 Strict Mode or effect re-runs
+  const loggedStepsRef = useRef<Set<number>>(new Set());
+  const loggedConsentRequestRef = useRef(false);
   
   const framework = FRAMEWORKS[frameworkId];
 
@@ -25,18 +30,40 @@ export const SphinxEngine: React.FC<SphinxEngineProps> = ({ data, frameworkId, o
   const dataKeys: (keyof SphinxResponse)[] = ['scrutinize', 'probe', 'hypothesize', 'investigate', 'narrow', 'execute'];
   
   useEffect(() => {
-    if (isPausedForConsent) return;
+    // 1. Check if paused for consent
+    if (isPausedForConsent) {
+        if (!loggedConsentRequestRef.current) {
+             onLog('System', 'Governance Halt', `Awaiting Sacred Consent for step: ${framework.terms.investigate}`);
+             loggedConsentRequestRef.current = true;
+        }
+        return;
+    }
 
+    // 2. Check for completion
     if (currentStepIndex >= 6) {
       const timeout = setTimeout(onComplete, 1000);
       return () => clearTimeout(timeout);
     }
 
+    // 3. Check if we need to pause for consent (Before step 3 'investigate' finishes? No, before it starts technically, or during)
+    // Design: We animate to index 3. Then we pause.
     if (currentStepIndex === CONSENT_STEP_INDEX && !consentGranted) {
       setIsPausedForConsent(true);
-      return;
+      return; // Return here so we don't schedule next step
     }
 
+    // 4. Log current step start (if not logged)
+    if (!loggedStepsRef.current.has(currentStepIndex)) {
+        const key = dataKeys[currentStepIndex];
+        const term = framework.terms[key];
+        const agent = data[key]?.agent;
+        const agentName = agent ? `${agent.name} (${agent.provider})` : 'Unknown Agent';
+        
+        onLog('AI_Agent', `Executing ${term}`, `Agent: ${agentName}`);
+        loggedStepsRef.current.add(currentStepIndex);
+    }
+
+    // 5. Handle Handoff Animation & Timer for next step
     // Start Handoff Animation
     setIsHandoff(true);
     const handoffTimer = setTimeout(() => {
@@ -51,12 +78,12 @@ export const SphinxEngine: React.FC<SphinxEngineProps> = ({ data, frameworkId, o
         clearTimeout(handoffTimer);
         clearTimeout(stepTimer);
     };
-  }, [currentStepIndex, isPausedForConsent, consentGranted, onComplete]);
+  }, [currentStepIndex, isPausedForConsent, consentGranted, onComplete, framework.terms, data, onLog, frameworkId]);
 
   const handleGrantConsent = () => {
     setConsentGranted(true);
     setIsPausedForConsent(false);
-    // Next step triggers handoff automatically
+    onLog('User', 'Sacred Consent Granted', `User authorized proceeding with: ${framework.terms.investigate}`);
   };
 
   const renderStepContent = (index: number) => {

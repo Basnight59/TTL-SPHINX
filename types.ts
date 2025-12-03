@@ -64,3 +64,12 @@ export interface SphinxResponse {
     agent?: AgentProfile;
   };
 }
+
+export interface AuditLogEntry {
+  id: string;
+  timestamp: string;
+  actor: 'User' | 'System' | 'AI_Agent';
+  action: string;
+  details?: string;
+  hash?: string;
+}

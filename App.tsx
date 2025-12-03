@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
+
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Layout } from './components/Layout';
 import { FrameworkSelector } from './components/FrameworkSelector';
 import { SphinxEngine } from './components/SphinxEngine';
 import { HobArtifact } from './components/HobArtifact';
+import { AuditLog } from './components/AuditLog';
 import { generateSphinxAnalysis } from './services/geminiService';
-import { FaithFrameworkId, SphinxResponse, AppState } from './types';
+import { FaithFrameworkId, SphinxResponse, AppState, AuditLogEntry } from './types';
 import { Loader2, AlertCircle, Sparkles } from 'lucide-react';
 import { FRAMEWORKS } from './constants';
 
@@ -15,10 +17,57 @@ const App: React.FC = () => {
   const [sphinxData, setSphinxData] = useState<SphinxResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [logs, setLogs] = useState<AuditLogEntry[]>([]);
+  
+  // Track the last hash to simulate a blockchain-like linked list
+  const lastHashRef = useRef<string>("0x0000000000000000");
+
+  const addLog = useCallback((actor: AuditLogEntry['actor'], action: string, details?: string) => {
+    const timestamp = new Date().toISOString();
+    
+    // Create a pseudo-crypto hash input: Previous Hash + Timestamp + Actor + Action
+    // This creates a dependency chain where modifying an old log would invalidate all subsequent hashes
+    const input = `${lastHashRef.current}:${timestamp}:${actor}:${action}:${details || ''}`;
+    
+    // Simple 32-bit FNV-1a hash implementation for demo purposes
+    let h1 = 0x811c9dc5;
+    for (let i = 0; i < input.length; i++) {
+      h1 ^= input.charCodeAt(i);
+      h1 = Math.imul(h1, 0x01000193);
+    }
+    
+    // Generate hex string (pseudo-hash)
+    const hashSegment = ('00000000' + (h1 >>> 0).toString(16)).slice(-8);
+    // Add randomness to prevent collisions in this lightweight demo
+    const randomSegment = Math.random().toString(16).substring(2, 10);
+    const fullHash = `0x${hashSegment}${randomSegment}`;
+    
+    // Update the chain tip
+    lastHashRef.current = fullHash;
+
+    const entry: AuditLogEntry = {
+      id: Math.random().toString(36).substring(2, 9),
+      timestamp,
+      actor,
+      action,
+      details,
+      hash: fullHash
+    };
+    
+    setLogs(prev => [...prev, entry]);
+  }, []);
+
+  // Initial Log
+  useEffect(() => {
+    if (logs.length === 0) {
+      addLog('System', 'System Initialized', 'TTL-SPHINX Governance Layer Online v1.0.4');
+    }
+  }, [addLog, logs.length]);
 
   const handleFrameworkSelect = (id: FaithFrameworkId) => {
     setSelectedFramework(id);
     setAppState('input');
+    addLog('User', 'Framework Selection', `Selected Framework: ${FRAMEWORKS[id].name}`);
   };
 
   const handleStartAnalysis = async () => {
@@ -26,13 +75,17 @@ const App: React.FC = () => {
     
     setIsGenerating(true);
     setError(null);
+    addLog('User', 'Protocol Initiated', `Query submitted: "${query.slice(0, 60)}${query.length > 60 ? '...' : ''}"`);
+    addLog('System', 'Orchestration Started', 'Dispatching query to multi-model agent swarm');
 
     try {
       const result = await generateSphinxAnalysis(query, selectedFramework);
       setSphinxData(result);
       setAppState('processing');
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An unexpected error occurred connecting to the S.P.H.I.N.X. engine.");
+      const errorMsg = err instanceof Error ? err.message : "An unexpected error occurred connecting to the S.P.H.I.N.X. engine.";
+      setError(errorMsg);
+      addLog('System', 'Error', errorMsg);
     } finally {
       setIsGenerating(false);
     }
@@ -40,6 +93,7 @@ const App: React.FC = () => {
 
   const handleProcessingComplete = () => {
     setAppState('complete');
+    addLog('System', 'Governance Cycle Complete', 'Handoff Oversight Block (HOB) generated and sealed.');
   };
 
   const handleReset = () => {
@@ -48,6 +102,7 @@ const App: React.FC = () => {
     setQuery('');
     setSphinxData(null);
     setError(null);
+    addLog('User', 'Reset', 'Session cleared. Ready for new inquiry.');
   };
 
   return (
@@ -56,7 +111,7 @@ const App: React.FC = () => {
       currentFramework={selectedFramework}
       step={appState}
     >
-      <div className="max-w-5xl mx-auto px-4 py-8">
+      <div className="max-w-5xl mx-auto px-4 py-8 flex-grow w-full flex flex-col">
         
         {/* STATE: SELECTION */}
         {appState === 'selection' && (
@@ -153,6 +208,7 @@ const App: React.FC = () => {
             data={sphinxData}
             frameworkId={selectedFramework}
             onComplete={handleProcessingComplete}
+            onLog={addLog}
           />
         )}
 
@@ -183,6 +239,10 @@ const App: React.FC = () => {
           </div>
         )}
 
+        {/* AUDIT LOG - Always Visible if not in selection */}
+        {appState !== 'selection' && (
+             <AuditLog logs={logs} />
+        )}
       </div>
     </Layout>
   );
